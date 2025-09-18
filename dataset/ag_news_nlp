@@ -1,0 +1,113 @@
+import os, re, json, sys
+import numpy as np
+import pandas as pd
+
+KAGGLE_TRAIN = "/kaggle/input/ag-news-classification-dataset/train.csv"
+KAGGLE_TEST  = "/kaggle/input/ag-news-classification-dataset/test.csv"
+
+OUT_DIR    = "dataset/agnews"
+CLASSES_DIR = "dataset/agnews-classes"
+os.makedirs(OUT_DIR, exist_ok=True)
+os.makedirs(CLASSES_DIR, exist_ok=True)
+
+LABEL_NAMES_14 = {1: "World", 2: "Sports", 3: "Business", 4: "Sci/Tech"}  # Kaggle style (1..4)
+
+def clean_text(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r'https?://\S+|www\.\S+', ' URL ', s)
+    s = re.sub(r'[\w\.-]+@[\w\.-]+', ' EMAIL ', s)
+    s = re.sub(r'\d+', ' NUM ', s)              # tuỳ chọn: có thể giữ số
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)          # chỉ giữ chữ/số/khoảng trắng
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+def load_from_kaggle():
+    train_df = pd.read_csv(KAGGLE_TRAIN)
+    test_df  = pd.read_csv(KAGGLE_TEST)
+    # Cột Kaggle: Class Index (1..4), Title, Description
+    train_df["Title"] = train_df["Title"].astype(str)
+    train_df["Description"] = train_df["Description"].astype(str)
+    test_df["Title"] = test_df["Title"].astype(str)
+    test_df["Description"] = test_df["Description"].astype(str)
+
+    train_df["text"] = (train_df["Title"] + " " + train_df["Description"]).map(clean_text)
+    test_df["text"]  = (test_df["Title"]  + " " + test_df["Description"]).map(clean_text)
+
+    train_df = train_df.rename(columns={"Class Index": "label"})
+    test_df  = test_df.rename(columns={"Class Index": "label"})
+
+    # Giữ các cột chuẩn
+    train_df = train_df[["label", "Title", "Description", "text"]]
+    test_df  = test_df[["label", "Title", "Description", "text"]]
+    return train_df, test_df
+
+def load_from_hf():
+    try:
+        from datasets import load_dataset
+    except Exception as e:
+        print("Hugging Face 'datasets' chưa cài. Chạy: pip install datasets", file=sys.stderr)
+        raise
+
+    ds = load_dataset("ag_news")
+    # HF: label 0..3, text (đã gộp title+description)
+    train_df = pd.DataFrame(ds["train"])
+    test_df  = pd.DataFrame(ds["test"])
+    # Đồng bộ cột giống Kaggle
+    train_df["Title"] = ""
+    train_df["Description"] = train_df["text"]
+    test_df["Title"]  = ""
+    test_df["Description"] = test_df["text"]
+
+    train_df["text"] = train_df["text"].astype(str).map(clean_text)
+    test_df["text"]  = test_df["text"].astype(str).map(clean_text)
+
+    # Chuyển label 0..3 -> 1..4 cho nhất quán với Kaggle / pipeline khác
+    train_df["label"] = train_df["label"].astype(int) + 1
+    test_df["label"]  = test_df["label"].astype(int) + 1
+
+    train_df = train_df[["label", "Title", "Description", "text"]]
+    test_df  = test_df[["label", "Title", "Description", "text"]]
+    return train_df, test_df
+
+def main():
+    # 1) Tải dữ liệu
+    if os.path.exists(KAGGLE_TRAIN) and os.path.exists(KAGGLE_TEST):
+        print(">> Using Kaggle CSVs")
+        train_df, test_df = load_from_kaggle()
+    else:
+        print(">> Using Hugging Face 'ag_news'")
+        train_df, test_df = load_from_hf()
+
+    # 2) Làm sạch NaN & ép kiểu
+    train_df = train_df.dropna(subset=["text", "label"]).copy()
+    test_df  = test_df.dropna(subset=["text", "label"]).copy()
+    train_df["label"] = train_df["label"].astype(int)
+    test_df["label"]  = test_df["label"].astype(int)
+
+    # 3) Lưu CSV sạch để EDA/Sklearn
+    train_out = os.path.join(OUT_DIR, "train_clean.csv")
+    test_out  = os.path.join(OUT_DIR, "test_clean.csv")
+    train_df.to_csv(train_out, index=False)
+    test_df.to_csv(test_out, index=False)
+    print(f"Saved {train_out} ({len(train_df):,} rows)")
+    print(f"Saved {test_out} ({len(test_df):,} rows)")
+
+    # 4) Lưu theo class giống “*-classes/{id}.npy” (dtype=object chứa chuỗi)
+    #    -> phù hợp benchmark pipeline kiểu bạn đang dùng cho CIFAR (mỗi lớp một .npy)
+    unique_labels = sorted(train_df["label"].unique().tolist())
+    label_map = {int(k): LABEL_NAMES_14.get(int(k), str(k)) for k in unique_labels}
+    with open(os.path.join(CLASSES_DIR, "label_map.json"), "w", encoding="utf-8") as f:
+        json.dump(label_map, f, ensure_ascii=False, indent=2)
+
+    for cid in unique_labels:
+        arr = train_df.loc[train_df["label"] == cid, "text"].to_numpy(dtype=object)
+        save_path = os.path.join(CLASSES_DIR, f"{cid}.npy")
+        np.save(save_path, arr)  # object array of strings
+        print(f"Saved {save_path} with {arr.shape[0]} texts.")
+
+    print("Done. Folder structure:")
+    print(f"- {OUT_DIR}/train_clean.csv, test_clean.csv")
+    print(f"- {CLASSES_DIR}/{{1..4}}.npy + label_map.json")
+
+if __name__ == "__main__":
+    main()
