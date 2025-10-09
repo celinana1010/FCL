@@ -1,0 +1,21 @@
+{
+  "optimizer": "sgd",
+  "device": "cuda",
+  "device_id": "0",
+  "dataset": "CIFAR100",
+  "num_classes": 100,
+  "model": "CNN",
+  "model_str": "CNN",
+  "batch_size": 128,
+  "local_learning_rate": 0.01,
+  "global_rounds": 100,
+  "local_epochs": 5,
+  "algorithm": "FedAvg",
+  "join_ratio": 1.0,
+  "random_join_ratio": false,
+  "num_clients": 10,
+  "eval_gap": 1,
+  "out_folder": "out",
+  "client_drop_rate": 0.0,
+  "time_threthold": 10000
+}
